@@ -1,0 +1,13 @@
+# $Id: MANIFEST,v 1.2 2002/04/05 21:31:54 scop Exp $
+
+BUGS
+ChangeLog
+Makefile.PL
+MANIFEST
+README
+TODO
+test.pl
+bin/gmuck
+docs/HTML-GMUCK.pod
+docs/gmuck.pod
+lib/HTML/GMUCK.pm

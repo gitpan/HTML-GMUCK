@@ -1,0 +1,189 @@
+#!/usr/bin/perl -w
+
+# $Id: gmuck,v 1.3 2002/04/05 21:48:13 scop Exp $
+
+use strict;
+
+require 5.00503;
+
+use vars qw($VERSION $File $Line);
+
+use Getopt::Long ();
+use HTML::GMUCK ();
+
+$VERSION = sprintf("%d.%02d", q$Revision: 1.3 $ =~ /(\d+)\.(\d+)/);
+
+$| = 1;
+
+# ----- Arguments -------------------------------------------------------------
+
+my $Opt_Help        = 0;   # Output help
+my $Opt_Quick       = 0;   # Quick mode
+my $Opt_Tab_Width   = 4;   # TAB width
+my $Opt_Stdin  = 'STDIN';  # Defult file name for STDIN input.
+my $Opt_Mode   = 'XHTML';  # Default mode.
+my $Opt_Quote      = 'D';  # Quote style.
+
+my $Opt_Elements    = 1;   # Element checks.
+my $Opt_Attributes  = 1;   # Attribute checks.
+my $Opt_Entities    = 1;   # Entity checks.
+my $Opt_Doctype     = 1;   # DOCTYPE checks.
+my $Opt_Mimetypes   = 1;   # MIME type checks.
+my $Opt_Deprecated  = 1;   # Deprecation checks.
+
+Getopt::Long::GetOptions('help!'       => \$Opt_Help,
+                         'quick!'      => \$Opt_Quick,
+                         'tabwidth=i'  => \$Opt_Tab_Width,
+                         'stdin=s'     => \$Opt_Stdin,
+                         'mode=s'      => \$Opt_Mode,
+                         'quote=s'     => \$Opt_Quote,
+
+                         'elements!'   => \$Opt_Elements,
+                         'attributes!' => \$Opt_Attributes,
+                         'entities!'   => \$Opt_Entities,
+                         'doctype!'    => \$Opt_Doctype,
+                         'mimetypes!'  => \$Opt_Mimetypes,
+                         'deprecated!' => \$Opt_Deprecated,
+                        );
+
+print "[ gmuck version $VERSION  (HTML::GMUCK $HTML::GMUCK::VERSION) ]\n";
+if ($Opt_Help) {
+  print <<"EOF";
+
+Usage: gmuck [OPTION...] [--] [FILE...]
+
+General OPTIONs are:
+  --[no]help            Output this help and exit.
+  --mode=<mode>         Mode of operation.  XHTML (default), HTML, XML.
+  --[no]quick           Quick mode (max 1 failed check per line).
+  --tabwidth=<n>        TAB width for error output.
+  --stdin=<filename>    File name for STDIN messages.
+  --quote=<char>        Preferred quote char; D=double, S=single, N=none.
+
+Per-check OPTIONs are (all on by default):
+  --[no]elements        Element checks.
+  --[no]attributes      Attribute checks.
+  --[no]entities        Entity checks.
+  --[no]doctype         DOCTYPE checks.
+  --[no]mimetypes       MIME type checks.
+  --[no]deprecated      Deprecation checks.
+
+See the gmuck(1) and HTML::GMUCK(3) manpages for more details.
+
+Exit status is 0 if no checks failed, else 1.
+
+EOF
+  exit(0);
+}
+
+if ($Opt_Quote =~ /^[Ss]/) {
+  $Opt_Quote = "'";
+} elsif ($Opt_Quote =~ /^[Nn]/) {
+  $Opt_Quote = '';
+} else {
+  if ($Opt_Quote !~ /^[Dd]/) {
+    warn("** Quote character must be one of D, S, N.\n");
+  }
+  $Opt_Quote = '"';
+}
+
+$Opt_Tab_Width = 4 unless ($Opt_Tab_Width > 0);
+
+# ----- initialization --------------------------------------------------------
+
+my $Line_Count          = 0;
+my $File_Count          = 0;
+my $Skip_Count          = 0;
+   $File                = "";
+   $Line                = 0;
+
+# ----- Main processing -------------------------------------------------------
+
+my $gmuck = HTML::GMUCK->new(tab_width => $Opt_Tab_Width,
+                             mode      => uc($Opt_Mode),
+                             quote     => $Opt_Quote,
+                            );
+
+print '[ Settings:',
+  ' (mode=', $gmuck->mode(),
+  ', tab=', $gmuck->tab_width(),
+  ', quote={', $gmuck->quote(), '}',
+  ($Opt_Quick ? ', quick mode' : ''),
+  ") ]\n";
+
+if (@ARGV) {
+  foreach $File (@ARGV) {
+    if (-d $File) {
+      #warn("** $File looks like a dir to me, skipping.\n");
+      $Skip_Count++;
+    } elsif (open(FILE, $File)) {
+      $File_Count++;
+      process_lines($gmuck, \*FILE);
+      close(FILE) or warn("** Error closing file $File: $!\n");
+    } else {
+      warn("** Can't open file $File for reading: $!\n");
+      $Skip_Count++;
+    }
+  }
+} else {
+  print "[ Reading from STDIN, ",
+    "use --help for options if you didn't want this. ]\n";
+  $File = $Opt_Stdin;
+  $File_Count++;
+  process_lines($gmuck, \*STDIN);
+}
+
+my ($errors, $warnings) = $gmuck->stats();
+
+print "[ Done. $File_Count files, $Skip_Count skipped, ",
+  "$Line_Count lines, $errors errors, $warnings warnings. ]\n";
+
+exit(($errors + $warnings > 0) ? 1 : 0);
+
+# ----- The workhorse ------------------------------------------------------- #
+
+sub process_lines
+{
+  my $gmuck = shift;
+  my $fh = shift or $Skip_Count++ and return;
+  $Line = 0;
+
+ LINE:
+  while (<$fh>) {
+    $Line++;
+    $Line_Count++;
+    output($gmuck->doctype($_))    and next LINE if $Opt_Doctype;
+    output($gmuck->attributes($_)) and next LINE if $Opt_Attributes;
+    output($gmuck->elements($_))   and next LINE if $Opt_Elements;
+    output($gmuck->mime_types($_)) and next LINE if $Opt_Mimetypes;
+    output($gmuck->entities($_))   and next LINE if $Opt_Entities;
+    output($gmuck->deprecated($_)) and next LINE if $Opt_Deprecated;
+  }
+}
+
+# ----- Utilities -------------------------------------------------------------
+
+sub output
+{
+  my $ret = 0;
+  foreach my $err (@_) {
+    print STDERR join(':', $File, ($Line + $err->{line}), $err->{col}),
+        ": [$err->{type}] ";
+    if ($err->{elem} || $err->{attr}) {
+      print STDERR '<';
+      if ($err->{elem}) {
+        print STDERR $err->{elem};
+        print STDERR '/' if $err->{attr};
+      }
+      if ($err->{attr}) {
+        print STDERR "\@$err->{attr}";
+      }
+      print STDERR '> ';
+    }
+    print STDERR "$err->{mesg}\n";
+    $ret++;
+  }
+  return ($ret && $Opt_Quick);
+}
+
+# ----- EOF -------------------------------------------------------------------
